@@ -13,6 +13,14 @@ class EMongoFile extends EMongoDocument{
 	 * CUploadFile
 	 */
 	private $_file;
+
+	/** @virtual */
+	private $fs;
+
+	function __construct($fs='fs') {
+   		parent::__construct();
+       	$this->fs=$fs;
+    }
 	
 	// Helper functions to get some common functionality on this class
 	
@@ -51,7 +59,7 @@ class EMongoFile extends EMongoDocument{
 	 * @return string
 	 */
 	public function collectionPrefix(){
-		return 'fs';
+		return $this->fs ? $this->fs : 'fs';
 	}
 	
 	/**
@@ -132,6 +140,7 @@ class EMongoFile extends EMongoDocument{
 			$this->trace(__FUNCTION__);
 		
 			if(!isset($this->{$this->primaryKey()})) $this->{$this->primaryKey()} = new MongoId;
+
 			if($this->getCollection()->storeFile($this->getFilename(), $this->getRawDocument())){ // The key change
 				$this->afterSave();
 				$this->setIsNewRecord(false);
@@ -143,18 +152,92 @@ class EMongoFile extends EMongoDocument{
 	}
 
 	/**
+	 * storeBytes the file.
+	 *
+	 * The only difference between the normal insert is that this uses the storeFile function on the GridFS object
+	 * @see EMongoDocument::insert()
+	 */
+	public function storeBytes($bytes){
+		if(!$this->getIsNewRecord())
+			throw new CDbException(Yii::t('yii','The active record cannot be inserted to database because it is not new.'));
+		if($this->beforeSave())
+		{
+			$this->trace(__FUNCTION__);
+
+			if(!isset($this->{$this->primaryKey()})) $this->{$this->primaryKey()} = new MongoId;
+
+			if($this->getCollection()->storeBytes($bytes, $this->getRawDocument())){ // The key change
+				$this->afterSave();
+				$this->setIsNewRecord(false);
+				$this->setScenario('update');
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Get collection will now return the GridFS object from the driver
 	 * @see EMongoDocument::getCollection()
 	 */
 	public function getCollection(){
 		return $this->getDbConnection()->getDB()->getGridFS($this->collectionPrefix());
 	}
-	
+
+	/**
+	 *   downloadFile
+	 *      */
+	public function downloadFile()
+	{
+		if($this->_file instanceof MongoGridFSFile) {
+			$file=$this->_file->file;
+
+			header('Content-Type: '.$file['type']);
+			header('Content-Disposition: attachment; filename="'.$file['name'].'"');
+			header('Content-Transfer-Encoding: binary');
+			$cursor = $this->getDbConnection()->getDB()->{$this->fs}->chunks->find(array("files_id" => $file['_id']))->sort(array("n" => 1));
+			foreach($cursor as $chunk) {
+			  	echo $chunk['data']->bin;
+			}
+
+			return true;
+		}
+		return false;
+	}
+
+    /**
+     * An alias for findBy_id() that relates to Yiis own findByPk
+     * @param $pk
+     */
+    public function findByPk($pk,$fields=array()){
+		$r = parent::findByPk($pk,$fields);
+		if ($r) $r->fs=$this->fs;
+		return $r;
+    }
+
+	/**
+	 * Find one record
+	 * @param array $criteria
+	 */
+	public function findOne($criteria=array(),$fields=array()){
+		if($criteria instanceof EMongoCriteria)
+			$criteria = $criteria->getCondition();
+		$c=$this->getDbCriteria();
+		if((
+			$record=$this->getCollection()->findOne($this->mergeCriteria(isset($c['condition']) ? $c['condition'] : array(), $criteria),
+				$this->mergeCriteria(isset($c['project']) ? $c['project'] : array(), $fields))
+		)!==null){
+			$this->resetScope();
+			return $this->populateRecord($record,true,$fields===array()?false:true);
+		}else
+			return null;
+	}
+
 	/**
 	 * Produces a trace message for functions in this class
 	 * @param string $func
 	 */
 	public function trace($func){
-		Yii::trace(get_class($this).'.'.$func.'()','extensions.MongoYii.EMongoFile');
+		//Yii::trace(get_class($this).'.'.$func.'()','extensions.MongoYii.EMongoFile');
 	}	
 }
